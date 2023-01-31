@@ -34,6 +34,12 @@ pub fn start_cli() {
         .long("show-ssa")
         .help("Emit debug information for the intermediate SSA IR");
 
+    let file_name = Arg::with_name("file-name")
+        .short("f")
+        .long("file-name")
+        .takes_value(true)
+        .help("Alternate name of a toml file containing a proof");
+
     let matches = App::new("nargo")
         .about("Noir's package manager")
         .version("0.1")
@@ -59,14 +65,16 @@ pub fn start_cli() {
             App::new("verify")
                 .about("Given a proof and a program, verify whether the proof is valid")
                 .arg(Arg::with_name("proof").help("The proof to verify").required(true))
-                .arg(allow_warnings.clone()),
+                .arg(allow_warnings.clone())
+                .arg(file_name.clone()),
         )
         .subcommand(
             App::new("prove")
                 .about("Create proof for this program")
                 .arg(Arg::with_name("proof_name").help("The name of the proof").required(true))
                 .arg(show_ssa.clone())
-                .arg(allow_warnings.clone()),
+                .arg(allow_warnings.clone())
+                .arg(file_name.clone()),
         )
         .subcommand(
             App::new("compile")
@@ -179,6 +187,7 @@ pub fn prove_and_verify(proof_name: &str, prg_dir: &Path, show_ssa: bool) -> boo
         &tmp_dir.into_path(),
         show_ssa,
         false,
+        None,
     ) {
         Ok(p) => p,
         Err(error) => {
@@ -187,7 +196,7 @@ pub fn prove_and_verify(proof_name: &str, prg_dir: &Path, show_ssa: bool) -> boo
         }
     };
 
-    verify_cmd::verify_with_path(prg_dir, &proof_path, show_ssa, false).unwrap()
+    verify_cmd::verify_with_path(prg_dir, &proof_path, show_ssa, false, None).unwrap()
 }
 
 fn add_std_lib(driver: &mut Driver) {

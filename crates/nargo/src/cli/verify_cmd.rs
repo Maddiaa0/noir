@@ -14,6 +14,8 @@ pub(crate) fn run(args: ArgMatches) -> Result<(), CliError> {
     let args = args.subcommand_matches("verify").unwrap();
 
     let proof_name = args.value_of("proof").unwrap();
+    let file_name = args.value_of("file-name");
+
     let mut proof_path = std::path::PathBuf::new();
     proof_path.push(Path::new(PROOFS_DIR));
 
@@ -21,18 +23,22 @@ pub(crate) fn run(args: ArgMatches) -> Result<(), CliError> {
     proof_path.set_extension(PROOF_EXT);
 
     let allow_warnings = args.is_present("allow-warnings");
-    let result = verify(proof_name, allow_warnings)?;
+    let result = verify(proof_name, allow_warnings, file_name)?;
     println!("Proof verified : {result}\n");
     Ok(())
 }
 
-fn verify(proof_name: &str, allow_warnings: bool) -> Result<bool, CliError> {
+fn verify(
+    proof_name: &str,
+    allow_warnings: bool,
+    file_name: Option<&str>,
+) -> Result<bool, CliError> {
     let curr_dir = std::env::current_dir().unwrap();
     let mut proof_path = PathBuf::new(); //or cur_dir?
     proof_path.push(PROOFS_DIR);
     proof_path.push(Path::new(proof_name));
     proof_path.set_extension(PROOF_EXT);
-    verify_with_path(&curr_dir, &proof_path, false, allow_warnings)
+    verify_with_path(&curr_dir, &proof_path, false, allow_warnings, file_name)
 }
 
 pub fn verify_with_path<P: AsRef<Path>>(
@@ -40,17 +46,19 @@ pub fn verify_with_path<P: AsRef<Path>>(
     proof_path: P,
     show_ssa: bool,
     allow_warnings: bool,
+    file_name: Option<&str>,
 ) -> Result<bool, CliError> {
     let compiled_program = compile_circuit(program_dir.as_ref(), show_ssa, allow_warnings)?;
     let mut public_inputs = BTreeMap::new();
 
     // Load public inputs (if any) from `VERIFIER_INPUT_FILE`.
+    let verifier_input_file = file_name.unwrap_or(VERIFIER_INPUT_FILE);
     let public_abi = compiled_program.abi.clone().unwrap().public_abi();
     let num_pub_params = public_abi.num_parameters();
     if num_pub_params != 0 {
         let curr_dir = program_dir;
         public_inputs =
-            read_inputs_from_file(curr_dir, VERIFIER_INPUT_FILE, Format::Toml, public_abi)?;
+            read_inputs_from_file(curr_dir, verifier_input_file, Format::Toml, public_abi)?;
     }
 
     let valid_proof = verify_proof(compiled_program, public_inputs, load_proof(proof_path)?)?;

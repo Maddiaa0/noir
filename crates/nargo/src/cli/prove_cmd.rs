@@ -20,18 +20,25 @@ pub(crate) fn run(args: ArgMatches) -> Result<(), CliError> {
     let proof_name = args.value_of("proof_name").unwrap();
     let show_ssa = args.is_present("show-ssa");
     let allow_warnings = args.is_present("allow-warnings");
-    prove(proof_name, show_ssa, allow_warnings)
+    let file_name = args.value_of("file-name");
+    prove(proof_name, show_ssa, allow_warnings, file_name)
 }
 
 /// In Barretenberg, the proof system adds a zero witness in the first index,
 /// So when we add witness values, their index start from 1.
 const WITNESS_OFFSET: u32 = 1;
 
-fn prove(proof_name: &str, show_ssa: bool, allow_warnings: bool) -> Result<(), CliError> {
+fn prove(
+    proof_name: &str,
+    show_ssa: bool,
+    allow_warnings: bool,
+    file_name: Option<&str>,
+) -> Result<(), CliError> {
     let curr_dir = std::env::current_dir().unwrap();
     let mut proof_path = PathBuf::new();
     proof_path.push(PROOFS_DIR);
-    let result = prove_with_path(proof_name, curr_dir, proof_path, show_ssa, allow_warnings);
+    let result =
+        prove_with_path(proof_name, curr_dir, proof_path, show_ssa, allow_warnings, file_name);
     match result {
         Ok(_) => Ok(()),
         Err(e) => Err(e),
@@ -42,24 +49,27 @@ pub fn compile_circuit_and_witness<P: AsRef<Path>>(
     program_dir: P,
     show_ssa: bool,
     allow_unused_variables: bool,
+    file_name: Option<&str>,
 ) -> Result<(noirc_driver::CompiledProgram, BTreeMap<Witness, FieldElement>), CliError> {
     let compiled_program = super::compile_cmd::compile_circuit(
         program_dir.as_ref(),
         show_ssa,
         allow_unused_variables,
     )?;
-    let solved_witness = parse_and_solve_witness(program_dir, &compiled_program)?;
+    let solved_witness = parse_and_solve_witness(program_dir, &compiled_program, file_name)?;
     Ok((compiled_program, solved_witness))
 }
 
 pub fn parse_and_solve_witness<P: AsRef<Path>>(
     program_dir: P,
     compiled_program: &noirc_driver::CompiledProgram,
+    file_name: Option<&str>,
 ) -> Result<BTreeMap<Witness, FieldElement>, CliError> {
     let abi = compiled_program.abi.as_ref().expect("compiled program is missing an abi object");
     // Parse the initial witness values from Prover.toml
+    let prover_input_file = file_name.unwrap_or(PROVER_INPUT_FILE);
     let witness_map =
-        read_inputs_from_file(&program_dir, PROVER_INPUT_FILE, Format::Toml, abi.clone())?;
+        read_inputs_from_file(&program_dir, prover_input_file, Format::Toml, abi.clone())?;
 
     // Solve the remaining witnesses
     let solved_witness = solve_witness(compiled_program, &witness_map)?;
@@ -118,9 +128,10 @@ pub fn prove_with_path<P: AsRef<Path>>(
     proof_dir: P,
     show_ssa: bool,
     allow_warnings: bool,
+    file_name: Option<&str>,
 ) -> Result<PathBuf, CliError> {
     let (compiled_program, solved_witness) =
-        compile_circuit_and_witness(program_dir, show_ssa, allow_warnings)?;
+        compile_circuit_and_witness(program_dir, show_ssa, allow_warnings, file_name)?;
 
     let backend = crate::backends::ConcreteBackend;
     let proof = backend.prove_with_meta(compiled_program.circuit, solved_witness);

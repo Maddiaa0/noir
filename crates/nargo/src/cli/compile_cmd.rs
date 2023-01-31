@@ -58,7 +58,7 @@ pub fn generate_circuit_and_witness_to_disk<P: AsRef<Path>>(
 
     if generate_witness {
         let solved_witness =
-            super::prove_cmd::parse_and_solve_witness(program_dir, &compiled_program)?;
+            super::prove_cmd::parse_and_solve_witness(program_dir, &compiled_program, None)?;
         let buf = Witness::to_bytes(&solved_witness);
 
         circuit_path.pop();
