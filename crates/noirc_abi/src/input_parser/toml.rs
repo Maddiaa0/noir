@@ -1,4 +1,4 @@
-use super::InputValue;
+use super::{parse_str_to_field, InputValue};
 use crate::{errors::InputParserError, Abi, AbiType, MAIN_RETURN_NAME};
 use acvm::FieldElement;
 use iter_extended::{btree_map, try_btree_map, try_vecmap, vecmap};
@@ -151,17 +151,6 @@ impl InputValue {
         };
 
         Ok(input_value)
-    }
-}
-
-fn parse_str_to_field(value: &str) -> Result<FieldElement, InputParserError> {
-    if value.starts_with("0x") {
-        FieldElement::from_hex(value).ok_or_else(|| InputParserError::ParseHexStr(value.to_owned()))
-    } else {
-        value
-            .parse::<i128>()
-            .map_err(|err_msg| InputParserError::ParseStr(err_msg.to_string()))
-            .map(FieldElement::from)
     }
 }
 

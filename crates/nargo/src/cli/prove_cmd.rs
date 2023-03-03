@@ -4,13 +4,16 @@ use acvm::ProofSystemCompiler;
 use clap::Args;
 use noirc_abi::input_parser::Format;
 
-use super::fs::{
-    inputs::{read_inputs_from_file, write_inputs_to_file},
-    keys::fetch_pk_and_vk,
-    program::read_program_from_file,
-    proof::save_proof_to_dir,
+use super::{fs::inputs::read_inputs_from_cli, NargoConfig};
+use super::{
+    fs::{
+        inputs::{read_inputs_from_file, write_inputs_to_file},
+        keys::fetch_pk_and_vk,
+        program::read_program_from_file,
+        proof::save_proof_to_dir,
+    },
+    parse_key_val,
 };
-use super::NargoConfig;
 use crate::{
     cli::{execute_cmd::execute_program, verify_cmd::verify_proof},
     constants::{PROOFS_DIR, PROVER_INPUT_FILE, TARGET_DIR, VERIFIER_INPUT_FILE},
@@ -21,29 +24,32 @@ use crate::{
 #[derive(Debug, Clone, Args)]
 pub(crate) struct ProveCommand {
     /// The name of the proof
-    proof_name: Option<String>,
+    pub(crate) proof_name: Option<String>,
 
     /// The name of the circuit build files (ACIR, proving and verification keys)
-    circuit_name: Option<String>,
+    pub(crate) circuit_name: Option<String>,
 
     /// Verify proof after proving
     #[arg(short, long)]
-    verify: bool,
+    pub(crate) verify: bool,
 
     /// Issue a warning for each unused variable instead of an error
     #[arg(short, long)]
-    allow_warnings: bool,
+    pub(crate) allow_warnings: bool,
 
     /// Emit debug information for the intermediate SSA IR
     #[arg(short, long)]
-    show_ssa: bool,
+    pub(crate) show_ssa: bool,
+
+    #[arg(short, long, value_parser = parse_key_val::<String, String>)]
+    pub(crate) inputs: Option<Vec<(String, String)>>,
 }
 
 pub(crate) fn run(args: ProveCommand, config: NargoConfig) -> Result<(), CliError> {
     let mut proof_dir = config.program_dir.clone();
     proof_dir.push(PROOFS_DIR);
 
-    let circuit_build_path = if let Some(circuit_name) = args.circuit_name {
+    let circuit_build_path = if let Some(circuit_name) = args.circuit_name.clone() {
         let mut circuit_build_path = config.program_dir.clone();
         circuit_build_path.push(TARGET_DIR);
         circuit_build_path.push(circuit_name);
@@ -52,27 +58,16 @@ pub(crate) fn run(args: ProveCommand, config: NargoConfig) -> Result<(), CliErro
         None
     };
 
-    prove_with_path(
-        args.proof_name,
-        config.program_dir,
-        proof_dir,
-        circuit_build_path,
-        args.verify,
-        args.show_ssa,
-        args.allow_warnings,
-    )?;
+    prove_with_path(config.program_dir, proof_dir, circuit_build_path, args)?;
 
     Ok(())
 }
 
 pub(crate) fn prove_with_path<P: AsRef<Path>>(
-    proof_name: Option<String>,
     program_dir: P,
     proof_dir: P,
     circuit_build_path: Option<PathBuf>,
-    check_proof: bool,
-    show_ssa: bool,
-    allow_warnings: bool,
+    args: ProveCommand,
 ) -> Result<Option<PathBuf>, CliError> {
     let (compiled_program, proving_key, verification_key) = match circuit_build_path {
         Some(circuit_build_path) => {
@@ -85,8 +80,8 @@ pub(crate) fn prove_with_path<P: AsRef<Path>>(
         None => {
             let compiled_program = super::compile_cmd::compile_circuit(
                 program_dir.as_ref(),
-                show_ssa,
-                allow_warnings,
+                args.show_ssa,
+                args.allow_warnings,
             )?;
 
             let backend = crate::backends::ConcreteBackend;
@@ -96,12 +91,18 @@ pub(crate) fn prove_with_path<P: AsRef<Path>>(
     };
 
     // Parse the initial witness values from Prover.toml
-    let (inputs_map, _) = read_inputs_from_file(
-        &program_dir,
-        PROVER_INPUT_FILE,
-        Format::Toml,
-        &compiled_program.abi,
-    )?;
+    let inputs_map = if let Some(inputs) = args.inputs {
+        let (map, _) = read_inputs_from_cli(inputs, &compiled_program.abi)?;
+        map
+    } else {
+        let (map, _) = read_inputs_from_file(
+            &program_dir,
+            PROVER_INPUT_FILE,
+            Format::Toml,
+            &compiled_program.abi,
+        )?;
+        map
+    };
 
     let solved_witness = execute_program(&compiled_program, &inputs_map)?;
 
@@ -120,7 +121,7 @@ pub(crate) fn prove_with_path<P: AsRef<Path>>(
     let backend = crate::backends::ConcreteBackend;
     let proof = backend.prove_with_pk(&compiled_program.circuit, solved_witness, &proving_key);
 
-    if check_proof {
+    if args.verify {
         let no_proof_name = "".into();
         verify_proof(
             &compiled_program,
@@ -132,7 +133,7 @@ pub(crate) fn prove_with_path<P: AsRef<Path>>(
         )?;
     }
 
-    let proof_path = if let Some(proof_name) = proof_name {
+    let proof_path = if let Some(proof_name) = args.proof_name {
         Some(save_proof_to_dir(&proof, &proof_name, proof_dir)?)
     } else {
         println!("{}", hex::encode(&proof));

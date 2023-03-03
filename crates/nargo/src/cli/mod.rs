@@ -3,7 +3,12 @@ use const_format::formatcp;
 use noirc_abi::InputMap;
 use noirc_driver::Driver;
 use noirc_frontend::graph::{CrateName, CrateType};
-use std::path::{Path, PathBuf};
+use std::{
+    error::Error,
+    path::{Path, PathBuf},
+};
+
+use crate::cli::prove_cmd::ProveCommand;
 
 mod fs;
 
@@ -79,15 +84,16 @@ pub fn prove_and_verify(proof_name: &str, prg_dir: &Path, show_ssa: bool) -> boo
     use tempdir::TempDir;
 
     let tmp_dir = TempDir::new("p_and_v_tests").unwrap();
-    match prove_cmd::prove_with_path(
-        Some(proof_name.to_owned()),
-        prg_dir,
-        &tmp_dir.into_path(),
-        None,
-        true,
+
+    let args = ProveCommand {
+        proof_name: Some(proof_name.to_owned()),
+        circuit_name: None,
+        verify: true,
+        allow_warnings: false,
         show_ssa,
-        false,
-    ) {
+        inputs: None,
+    };
+    match prove_cmd::prove_with_path(prg_dir, &tmp_dir.into_path(), None, args) {
         Ok(_) => true,
         Err(error) => {
             println!("{error}");
@@ -105,6 +111,18 @@ fn add_std_lib(driver: &mut Driver) {
 
 fn path_to_stdlib() -> PathBuf {
     dirs::config_dir().unwrap().join("noir-lang").join("std/src")
+}
+
+/// Clap custom parser a single key-value pair
+pub fn parse_key_val<T, U>(s: &str) -> Result<(T, U), Box<dyn Error + Send + Sync + 'static>>
+where
+    T: std::str::FromStr,
+    T::Err: Error + Send + Sync + 'static,
+    U: std::str::FromStr,
+    U::Err: Error + Send + Sync + 'static,
+{
+    let pos = s.find('=').ok_or_else(|| format!("invalid KEY=value: no `=` found in `{s}`"))?;
+    Ok((s[..pos].parse()?, s[pos + 1..].parse()?))
 }
 
 // FIXME: I not sure that this is the right place for this tests.
