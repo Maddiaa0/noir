@@ -1,11 +1,17 @@
-use std::{collections::BTreeMap, io::Write, path::Path};
+use std::{io::Write, path::Path};
 
-use acvm::{pwg::block::Blocks, PartialWitnessGenerator, ProofSystemCompiler, UnresolvedData};
+use acvm::{
+    acir::circuit::Opcode, pwg::block::Blocks, FieldElement, PartialWitnessGenerator,
+    ProofSystemCompiler, UnresolvedData,
+};
 use clap::Args;
 use nargo::ops::execute_circuit;
-use noirc_driver::{CompileOptions, Driver};
+use noirc_abi::{input_parser::InputValue, AbiType, InputMap, WitnessMap};
+use noirc_driver::{CompileOptions, CompiledProgram, Driver};
 use noirc_frontend::node_interner::FuncId;
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
+
+use rand::Rng;
 
 use crate::{errors::CliError, resolver::Resolver};
 
@@ -84,12 +90,62 @@ fn run_test(
     let program = driver
         .compile_no_check(config, main)
         .map_err(|_| CliError::Generic(format!("Test '{test_name}' failed to compile")))?;
-    let mut solved_witness = BTreeMap::new();
+
+    println!("{:#?}", program.abi);
+
+    // TODO: use 100 fuzz runs for the meantime until we work more of this out.
+    let test_options = TestOptions::new(10);
+
+    // TODO(Md): make this api very very nice
+    // Check if we are running a fuzz test
+    if program.abi.parameters.len() > 0 {
+        println!("Running fuzz test");
+        run_fuzz_test(test_options, program)
+    } else {
+        println!("Running normal test");
+        let mut solved_witness = WitnessMap::new();
+        let mut blocks = Blocks::default();
+
+        // Run the backend to ensure the PWG evaluates functions like std::hash::pedersen,
+        // otherwise constraints involving these expressions will not error.
+        solve_test(&mut solved_witness, &mut blocks, program.circuit.opcodes)
+    }
+}
+
+fn run_fuzz_test(test_options: TestOptions, program: CompiledProgram) -> Result<(), CliError> {
+    // let fuzz_runner = test_options.fuzz_runner();
+    // TODO: solve the fuzz args
+
+    // dedup?
     let mut blocks = Blocks::default();
 
-    // Run the backend to ensure the PWG evaluates functions like std::hash::pedersen,
-    // otherwise constraints involving these expressions will not error.
-    match backend.solve(&mut solved_witness, &mut blocks, program.circuit.opcodes) {
+    // TODO(Maddiaa): move to fuzzer object with the rng built in
+    for i in 0..test_options.fuzz_runs {
+        println!("Running fuzz test {}", i);
+
+        let params = fuzz_params(&program);
+        let mut solved_witness = program.abi.encode(&params, None)?;
+
+        // Do I add params to the solved witness here for args - look at the main entry point?
+
+        // Run the backend to ensure the PWG evaluates functions like std::hash::pedersen,
+        // otherwise constraints involving these expressions will not error.
+        let test_result =
+            solve_test(&mut solved_witness, &mut blocks, program.circuit.opcodes.clone());
+        if test_result.is_err() {
+            return test_result;
+        }
+    }
+    Ok(())
+}
+
+fn solve_test(
+    solved_witness: &mut WitnessMap,
+    blocks: &mut Blocks,
+    opcodes: Vec<Opcode>,
+) -> Result<(), CliError> {
+    let backend = crate::backends::ConcreteBackend;
+    match backend.solve(solved_witness, blocks, opcodes) {
         Ok(UnresolvedData { unresolved_opcodes, unresolved_oracles, unresolved_brilligs }) => {
             if !unresolved_opcodes.is_empty()
                 || !unresolved_oracles.is_empty()

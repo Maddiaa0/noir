@@ -639,11 +639,12 @@ impl<'a> Resolver<'a> {
             self.push_err(ResolverError::NecessaryPub { ident: func.name_ident().clone() });
         }
 
-        if attributes == Some(Attribute::Test) && !parameters.is_empty() {
-            self.push_err(ResolverError::TestFunctionHasParameters {
-                span: func.name_ident().span(),
-            });
-        }
+        // NTS(Maddiaa): remove this to debug testing flow
+        // if attributes == Some(Attribute::Test) && !parameters.is_empty() {
+        //     self.push_err(ResolverError::TestFunctionHasParameters {
+        //         span: func.name_ident().span(),
+        //     });
+        // }
 
         let mut typ = Type::Function(parameter_types, return_type);
 

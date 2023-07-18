@@ -9,6 +9,7 @@ use color_eyre::eyre;
 use crate::find_package_root;
 
 mod fs;
+mod runner;
 
 mod check_cmd;
 mod codegen_verifier_cmd;
