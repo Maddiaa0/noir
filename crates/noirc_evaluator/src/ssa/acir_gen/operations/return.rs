@@ -32,6 +32,7 @@ pub(crate) fn evaluate(
         let objects = match Memory::deref(ctx, *node_id) {
             Some(a) => {
                 let array = &ctx.mem[a];
+                memory_map.return_array(a);
                 memory_map.load_array(array, evaluator)
             }
             None => {
@@ -48,8 +49,15 @@ pub(crate) fn evaluate(
                     "we do not allow private ABI inputs to be returned as public outputs",
                 )));
             }
-            let dedup_witness = evaluator.create_intermediate_variable(Expression::from(witness));
-            evaluator.return_values.insert(dedup_witness);
+            // Check if the outputted witness needs separating from an existing occurrence in the
+            // abi. This behavior stems from usage of the `distinct` keyword.
+            let return_witness = if evaluator.should_proxy_witness_for_abi_output(witness) {
+                let proxy_constraint = Expression::from(witness);
+                evaluator.create_intermediate_variable(proxy_constraint)
+            } else {
+                witness
+            };
+            evaluator.return_values.push(return_witness);
         }
     }
 

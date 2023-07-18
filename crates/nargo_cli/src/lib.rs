@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-#![warn(unused_crate_dependencies, unused_extern_crates)]
+#![warn(unused_extern_crates)]
 #![warn(unreachable_pub)]
 #![warn(clippy::semicolon_if_nothing_returned)]
 
@@ -49,7 +49,8 @@ fn find_package_manifest(current_path: &Path) -> Result<PathBuf, InvalidPackageE
         .ok_or_else(|| InvalidPackageError::MissingManifestFile(current_path.to_path_buf()))
 }
 
-fn lib_or_bin(current_path: &Path) -> Result<(PathBuf, CrateType), InvalidPackageError> {
+fn lib_or_bin(current_path: impl AsRef<Path>) -> Result<(PathBuf, CrateType), InvalidPackageError> {
+    let current_path = current_path.as_ref();
     // A library has a lib.nr and a binary has a main.nr
     // You cannot have both.
     let src_path = find_dir(current_path, "src")

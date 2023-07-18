@@ -1,8 +1,6 @@
 use clap::{Args, Parser, Subcommand};
 use const_format::formatcp;
-use noirc_abi::InputMap;
-use noirc_driver::CompileOptions;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use color_eyre::eyre;
 
@@ -16,8 +14,8 @@ mod codegen_verifier_cmd;
 mod compile_cmd;
 mod execute_cmd;
 mod gates_cmd;
+mod lsp_cmd;
 mod new_cmd;
-mod print_acir_cmd;
 mod prove_cmd;
 mod test_cmd;
 mod verify_cmd;
@@ -58,61 +56,41 @@ enum NargoCommand {
     Verify(verify_cmd::VerifyCommand),
     Test(test_cmd::TestCommand),
     Gates(gates_cmd::GatesCommand),
-    PrintAcir(print_acir_cmd::PrintAcirCommand),
+    Lsp(lsp_cmd::LspCommand),
 }
 
 pub fn start_cli() -> eyre::Result<()> {
     let NargoCli { command, mut config } = NargoCli::parse();
 
     // Search through parent directories to find package root if necessary.
-    if !matches!(command, NargoCommand::New(_)) {
+    if !matches!(command, NargoCommand::New(_) | NargoCommand::Lsp(_)) {
         config.program_dir = find_package_root(&config.program_dir)?;
     }
 
+    let backend = crate::backends::ConcreteBackend::default();
+
     match command {
-        NargoCommand::New(args) => new_cmd::run(args, config),
-        NargoCommand::Check(args) => check_cmd::run(args, config),
-        NargoCommand::Compile(args) => compile_cmd::run(args, config),
-        NargoCommand::Execute(args) => execute_cmd::run(args, config),
-        NargoCommand::Prove(args) => prove_cmd::run(args, config),
-        NargoCommand::Verify(args) => verify_cmd::run(args, config),
-        NargoCommand::Test(args) => test_cmd::run(args, config),
-        NargoCommand::Gates(args) => gates_cmd::run(args, config),
-        NargoCommand::CodegenVerifier(args) => codegen_verifier_cmd::run(args, config),
-        NargoCommand::PrintAcir(args) => print_acir_cmd::run(args, config),
+        NargoCommand::New(args) => new_cmd::run(&backend, args, config),
+        NargoCommand::Check(args) => check_cmd::run(&backend, args, config),
+        NargoCommand::Compile(args) => compile_cmd::run(&backend, args, config),
+        NargoCommand::Execute(args) => execute_cmd::run(&backend, args, config),
+        NargoCommand::Prove(args) => prove_cmd::run(&backend, args, config),
+        NargoCommand::Verify(args) => verify_cmd::run(&backend, args, config),
+        NargoCommand::Test(args) => test_cmd::run(&backend, args, config),
+        NargoCommand::Gates(args) => gates_cmd::run(&backend, args, config),
+        NargoCommand::CodegenVerifier(args) => codegen_verifier_cmd::run(&backend, args, config),
+        NargoCommand::Lsp(args) => lsp_cmd::run(&backend, args, config),
     }?;
 
     Ok(())
 }
 
-// helper function which tests noir programs by trying to generate a proof and verify it
-pub fn prove_and_verify(proof_name: &str, prg_dir: &Path, show_ssa: bool) -> bool {
-    use tempdir::TempDir;
-
-    let tmp_dir = TempDir::new("p_and_v_tests").unwrap();
-    let compile_options = CompileOptions { show_ssa, allow_warnings: false, show_output: false };
-
-    match prove_cmd::prove_with_path(
-        Some(proof_name.to_owned()),
-        prg_dir,
-        &tmp_dir.into_path(),
-        None,
-        true,
-        &compile_options,
-    ) {
-        Ok(_) => true,
-        Err(error) => {
-            println!("{error}");
-            false
-        }
-    }
-}
-
 // FIXME: I not sure that this is the right place for this tests.
 #[cfg(test)]
 mod tests {
-    use noirc_driver::Driver;
-    use noirc_frontend::graph::CrateType;
+    use noirc_driver::{check_crate, create_local_crate};
+    use noirc_errors::reporter;
+    use noirc_frontend::{graph::CrateType, hir::Context};
 
     use std::path::{Path, PathBuf};
 
@@ -122,10 +100,19 @@ mod tests {
     ///
     /// This is used for tests.
     fn file_compiles<P: AsRef<Path>>(root_file: P) -> bool {
-        let mut driver = Driver::new(&acvm::Language::R1CS);
-        driver.create_local_crate(&root_file, CrateType::Binary);
-        crate::resolver::add_std_lib(&mut driver);
-        driver.file_compiles()
+        let mut context = Context::default();
+        create_local_crate(&mut context, &root_file, CrateType::Binary);
+
+        let result = check_crate(&mut context, false, false);
+        let success = result.is_ok();
+
+        let errors = match result {
+            Ok(warnings) => warnings,
+            Err(errors) => errors,
+        };
+
+        reporter::report_all(&context.file_manager, &errors, false);
+        success
     }
 
     #[test]

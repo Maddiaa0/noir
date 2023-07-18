@@ -5,7 +5,10 @@
 
 use std::{collections::BTreeMap, str};
 
-use acvm::{acir::native_types::Witness, FieldElement};
+use acvm::{
+    acir::native_types::{Witness, WitnessMap},
+    FieldElement,
+};
 use errors::AbiError;
 use input_parser::InputValue;
 use iter_extended::{try_btree_map, try_vecmap, vecmap};
@@ -21,9 +24,6 @@ mod serialization;
 
 /// A map from the fields in an TOML/JSON file which correspond to some ABI to their values
 pub type InputMap = BTreeMap<String, InputValue>;
-
-/// A map from the witnesses in a constraint system to the field element values
-pub type WitnessMap = BTreeMap<Witness, FieldElement>;
 
 /// A tuple of the arguments to a function along with its return value.
 pub type FunctionSignature = (Vec<AbiParameter>, Option<AbiType>);
@@ -59,7 +59,7 @@ pub enum AbiType {
             serialize_with = "serialization::serialize_struct_fields",
             deserialize_with = "serialization::deserialize_struct_fields"
         )]
-        fields: BTreeMap<String, AbiType>,
+        fields: Vec<(String, AbiType)>,
     },
     String {
         length: u64,
@@ -81,6 +81,30 @@ impl std::fmt::Display for AbiVisibility {
         match self {
             AbiVisibility::Public => write!(f, "pub"),
             AbiVisibility::Private => write!(f, "priv"),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+/// Represents whether the return value should compromise of unique witness indices such that no
+/// index occurs within the program's abi more than once.
+///
+/// This is useful for application stacks that require an uniform abi across across multiple
+/// circuits. When index duplication is allowed, the compiler may identify that a public input
+/// reaches the output unaltered and is thus referenced directly, causing the input and output
+/// witness indices to overlap. Similarly, repetitions of copied values in the output may be
+/// optimized away.
+pub enum AbiDistinctness {
+    Distinct,
+    DuplicationAllowed,
+}
+
+impl std::fmt::Display for AbiDistinctness {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AbiDistinctness::Distinct => write!(f, "distinct"),
+            AbiDistinctness::DuplicationAllowed => write!(f, "duplication-allowed"),
         }
     }
 }
@@ -225,12 +249,12 @@ impl Abi {
                     return Err(AbiError::TypeMismatch { param, value });
                 }
 
-                Self::encode_value(value).map(|v| (param_name, v))
+                Self::encode_value(value, &expected_type).map(|v| (param_name, v))
             })
             .collect::<Result<_, _>>()?;
 
         // Write input field elements into witness indices specified in `self.param_witnesses`.
-        let mut witness_map: WitnessMap = encoded_input_map
+        let mut witness_map: BTreeMap<Witness, FieldElement> = encoded_input_map
             .iter()
             .flat_map(|(param_name, encoded_param_fields)| {
                 let param_witness_indices = &self.param_witnesses[param_name];
@@ -251,7 +275,7 @@ impl Abi {
                         value: return_value,
                     });
                 }
-                let encoded_return_fields = Self::encode_value(return_value)?;
+                let encoded_return_fields = Self::encode_value(return_value, return_type)?;
 
                 // We need to be more careful when writing the return value's witness values.
                 // This is as it may share witness indices with other public inputs so we must check that when
@@ -273,24 +297,32 @@ impl Abi {
             (_, None) => {}
         }
 
-        Ok(witness_map)
+        Ok(witness_map.into())
     }
 
-    fn encode_value(value: InputValue) -> Result<Vec<FieldElement>, AbiError> {
+    fn encode_value(value: InputValue, abi_type: &AbiType) -> Result<Vec<FieldElement>, AbiError> {
         let mut encoded_value = Vec::new();
-        match value {
-            InputValue::Field(elem) => encoded_value.push(elem),
-            InputValue::Vec(vec_elem) => encoded_value.extend(vec_elem),
-            InputValue::String(string) => {
+        match (value, abi_type) {
+            (InputValue::Field(elem), _) => encoded_value.push(elem),
+
+            (InputValue::Vec(vec_elements), AbiType::Array { typ, .. }) => {
+                for elem in vec_elements {
+                    encoded_value.extend(Self::encode_value(elem, typ)?);
+                }
+            }
+
+            (InputValue::String(string), _) => {
                 let str_as_fields =
                     string.bytes().map(|byte| FieldElement::from_be_bytes_reduce(&[byte]));
                 encoded_value.extend(str_as_fields);
             }
-            InputValue::Struct(object) => {
-                for value in object.into_values() {
-                    encoded_value.extend(Self::encode_value(value)?);
+
+            (InputValue::Struct(object), AbiType::Struct { fields }) => {
+                for (field, typ) in fields {
+                    encoded_value.extend(Self::encode_value(object[field].clone(), typ)?);
                 }
             }
+            _ => unreachable!("value should have already been checked to match abi type"),
         }
         Ok(encoded_value)
     }
@@ -356,11 +388,14 @@ impl Abi {
 
                 InputValue::Field(field_element)
             }
-            AbiType::Array { length, .. } => {
-                let field_elements: Vec<FieldElement> =
-                    field_iterator.take(*length as usize).collect();
+            AbiType::Array { length, typ } => {
+                let length = *length as usize;
+                let mut array_elements = Vec::with_capacity(length);
+                for _ in 0..length {
+                    array_elements.push(Self::decode_value(field_iterator, typ)?);
+                }
 
-                InputValue::Vec(field_elements)
+                InputValue::Vec(array_elements)
             }
             AbiType::String { length } => {
                 let field_elements: Vec<FieldElement> =
@@ -431,7 +466,13 @@ mod test {
 
         // Note we omit return value from inputs
         let inputs: InputMap = BTreeMap::from([
-            ("thing1".to_string(), InputValue::Vec(vec![FieldElement::one(), FieldElement::one()])),
+            (
+                "thing1".to_string(),
+                InputValue::Vec(vec![
+                    InputValue::Field(FieldElement::one()),
+                    InputValue::Field(FieldElement::one()),
+                ]),
+            ),
             ("thing2".to_string(), InputValue::Field(FieldElement::zero())),
         ]);
 

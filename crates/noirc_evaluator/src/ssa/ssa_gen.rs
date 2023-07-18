@@ -124,7 +124,7 @@ impl IrGenerator {
         &mut self,
         struct_name: &str,
         ident_def: Option<Definition>,
-        fields: &BTreeMap<String, noirc_abi::AbiType>,
+        fields: &[(String, noirc_abi::AbiType)],
         witnesses: &BTreeMap<String, Vec<Witness>>,
     ) -> Value {
         let values = vecmap(fields, |(name, field_typ)| {
@@ -189,14 +189,7 @@ impl IrGenerator {
                     let function_node_id = self.context.get_or_create_opcode_node_id(opcode);
                     Ok(Value::Node(function_node_id))
                 }
-                Definition::Oracle(name, func_id) => {
-                    let id = *func_id;
-                    if !self.context.function_already_compiled(id) {
-                        let index = self.context.get_function_index();
-                        self.create_function(id, index, Some(name.to_string()))?;
-                    }
-                    Ok(Value::Node(self.context.get_function_node_id(id).unwrap()))
-                }
+                Definition::Oracle(_) => unimplemented!("oracles not supported by deprecated SSA"),
             }
         }
     }
@@ -215,6 +208,9 @@ impl IrGenerator {
                 self.context.new_instruction(op, rhs_type)
             }
             UnaryOp::Not => self.context.new_instruction(Operation::Not(rhs), rhs_type),
+            UnaryOp::MutableReference | UnaryOp::Dereference => {
+                unimplemented!("Mutable references are unimplemented in the old ssa backend")
+            }
         }
     }
 
@@ -255,6 +251,9 @@ impl IrGenerator {
                 let val = self.find_variable(ident_def).unwrap();
                 val.get_field_member(*field_index)
             }
+            LValue::Dereference { .. } => {
+                unreachable!("Mutable references are unsupported in the old ssa backend")
+            }
         }
     }
 
@@ -263,6 +262,7 @@ impl IrGenerator {
             LValue::Ident(ident) => &ident.definition,
             LValue::Index { array, .. } => Self::lvalue_ident_def(array.as_ref()),
             LValue::MemberAccess { object, .. } => Self::lvalue_ident_def(object.as_ref()),
+            LValue::Dereference { reference, .. } => Self::lvalue_ident_def(reference.as_ref()),
         }
     }
 
@@ -477,6 +477,9 @@ impl IrGenerator {
                 let value = val.get_field_member(*field_index).clone();
                 self.assign_pattern(&value, rhs)?;
             }
+            LValue::Dereference { .. } => {
+                unreachable!("Mutable references are unsupported in the old ssa backend")
+            }
         }
         Ok(Value::dummy())
     }
@@ -512,8 +515,8 @@ impl IrGenerator {
         match expr {
             Expression::Ident(ident) => self.ssa_gen_identifier(ident),
             Expression::Binary(binary) => {
-                // Note: we disallows structs/tuples in infix expressions.
-                // The type checker currently disallows this as well but not if they come from generic type
+                // Note: we disallow structs/tuples in infix expressions.
+                // The type checker currently disallows this as well but not if they come from a generic type
                 // We could allow some in the future, e.g. struct == struct
                 let lhs = self.ssa_gen_expression(&binary.lhs)?.to_node_ids();
                 let rhs = self.ssa_gen_expression(&binary.rhs)?.to_node_ids();

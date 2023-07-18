@@ -10,17 +10,7 @@ fn main(mut x: u32, y: u32, z: u32) {
     x *= x;  //144
     x *= x;  //20736
     x *= x;  //429 981 696
-   // let w = toto(x) as u32;
-
-    constrain x == z ;//+w;
-   let _a = unsafe(x);
-    //let b = rand(x);
-    //constrain b == 0;
-   let y= unsafe(x) as Field;
-   let u =unsafe_safe_inverse(y);
-   constrain u*y == 1;
-
-
+    assert(x == z);
 }
 
 unconstrained fn unsafe_safe_inverse(x: Field) ->Field {

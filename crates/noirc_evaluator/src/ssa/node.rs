@@ -507,6 +507,36 @@ impl Instruction {
             }
         }
     }
+
+    pub(crate) fn get_location(&self) -> Option<Location> {
+        match &self.operation {
+            Operation::Binary(bin) => match bin.operator {
+                BinaryOp::Udiv(location)
+                | BinaryOp::Sdiv(location)
+                | BinaryOp::Urem(location)
+                | BinaryOp::Srem(location)
+                | BinaryOp::Div(location)
+                | BinaryOp::Shr(location) => Some(location),
+                _ => None,
+            },
+            Operation::Call { location, .. } => Some(*location),
+            Operation::Load { location, .. }
+            | Operation::Store { location, .. }
+            | Operation::Constrain(_, location) => *location,
+            Operation::Cast(_)
+            | Operation::Truncate { .. }
+            | Operation::Not(_)
+            | Operation::Jne(_, _)
+            | Operation::Jeq(_, _)
+            | Operation::Jmp(_)
+            | Operation::Phi { .. }
+            | Operation::Return(_)
+            | Operation::Result { .. }
+            | Operation::Cond { .. }
+            | Operation::Intrinsic(_, _)
+            | Operation::Nop => None,
+        }
+    }
 }
 
 //adapted from LLVM IR
@@ -901,7 +931,10 @@ impl Binary {
                 } else if l_is_zero {
                     return Ok(l_eval); //TODO what is the correct result?
                 } else if let (Some(lhs), Some(rhs)) = (lhs, rhs) {
-                    return Ok(NodeEval::Const(lhs - rhs * (lhs / rhs), res_type));
+                    let lhs = res_type.field_to_type(lhs).to_u128();
+                    let rhs = res_type.field_to_type(rhs).to_u128();
+                    let result = lhs - rhs * (lhs / rhs);
+                    return Ok(NodeEval::Const(FieldElement::from(result), res_type));
                 }
             }
             BinaryOp::Srem(loc) => {
@@ -927,8 +960,10 @@ impl Binary {
                         !res_type.is_native_field(),
                         "ICE: comparisons are not implemented for field elements"
                     );
-                    let res = if lhs < rhs { FieldElement::one() } else { FieldElement::zero() };
-                    return Ok(NodeEval::Const(res, ObjectType::boolean()));
+                    return Ok(NodeEval::Const(
+                        FieldElement::from(lhs < rhs),
+                        ObjectType::boolean(),
+                    ));
                 }
             }
             BinaryOp::Ule => {
@@ -940,8 +975,10 @@ impl Binary {
                         !res_type.is_native_field(),
                         "ICE: comparisons are not implemented for field elements"
                     );
-                    let res = if lhs <= rhs { FieldElement::one() } else { FieldElement::zero() };
-                    return Ok(NodeEval::Const(res, ObjectType::boolean()));
+                    return Ok(NodeEval::Const(
+                        FieldElement::from(lhs <= rhs),
+                        ObjectType::boolean(),
+                    ));
                 }
             }
             BinaryOp::Slt => (),
@@ -951,8 +988,10 @@ impl Binary {
                     return Ok(NodeEval::Const(FieldElement::zero(), ObjectType::boolean()));
                     //n.b we assume the type of lhs and rhs is unsigned because of the opcode, we could also verify this
                 } else if let (Some(lhs), Some(rhs)) = (lhs, rhs) {
-                    let res = if lhs < rhs { FieldElement::one() } else { FieldElement::zero() };
-                    return Ok(NodeEval::Const(res, ObjectType::boolean()));
+                    return Ok(NodeEval::Const(
+                        FieldElement::from(lhs < rhs),
+                        ObjectType::boolean(),
+                    ));
                 }
             }
             BinaryOp::Lte => {
@@ -960,30 +999,30 @@ impl Binary {
                     return Ok(NodeEval::Const(FieldElement::one(), ObjectType::boolean()));
                     //n.b we assume the type of lhs and rhs is unsigned because of the opcode, we could also verify this
                 } else if let (Some(lhs), Some(rhs)) = (lhs, rhs) {
-                    let res = if lhs <= rhs { FieldElement::one() } else { FieldElement::zero() };
-                    return Ok(NodeEval::Const(res, ObjectType::boolean()));
+                    return Ok(NodeEval::Const(
+                        FieldElement::from(lhs <= rhs),
+                        ObjectType::boolean(),
+                    ));
                 }
             }
             BinaryOp::Eq => {
                 if self.lhs == self.rhs {
                     return Ok(NodeEval::Const(FieldElement::one(), ObjectType::boolean()));
                 } else if let (Some(lhs), Some(rhs)) = (lhs, rhs) {
-                    if lhs == rhs {
-                        return Ok(NodeEval::Const(FieldElement::one(), ObjectType::boolean()));
-                    } else {
-                        return Ok(NodeEval::Const(FieldElement::zero(), ObjectType::boolean()));
-                    }
+                    return Ok(NodeEval::Const(
+                        FieldElement::from(lhs == rhs),
+                        ObjectType::boolean(),
+                    ));
                 }
             }
             BinaryOp::Ne => {
                 if self.lhs == self.rhs {
                     return Ok(NodeEval::Const(FieldElement::zero(), ObjectType::boolean()));
                 } else if let (Some(lhs), Some(rhs)) = (lhs, rhs) {
-                    if lhs != rhs {
-                        return Ok(NodeEval::Const(FieldElement::one(), ObjectType::boolean()));
-                    } else {
-                        return Ok(NodeEval::Const(FieldElement::zero(), ObjectType::boolean()));
-                    }
+                    return Ok(NodeEval::Const(
+                        FieldElement::from(lhs != rhs),
+                        ObjectType::boolean(),
+                    ));
                 }
             }
             BinaryOp::And => {
